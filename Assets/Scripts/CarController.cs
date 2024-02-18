@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using static UnityEngine.GraphicsBuffer;
 
 public class CarController : MonoBehaviour
 {
@@ -50,13 +51,18 @@ public class CarController : MonoBehaviour
     public float engineSoundMinPitch = 0.2f;
     public float engineSoundMaxPitch = 2.2f;
 
+    public CircuitMng circuit;
+
+    public float timeOutRoad = 2f;
+    private float timeOutRoadAux;
+
     private void Awake()
     {
         rigidbody = GetComponent<Rigidbody>();
 
         centerOfMass = transform.Find("CenterOfMass");
         if (centerOfMass)
-            rigidbody.centerOfMass = centerOfMass.position;
+            rigidbody.centerOfMass = centerOfMass.localPosition;
 
         // get the wheels references
         frontWheels[0] = transform.Find("FrontLeftWheel").GetComponent<WheelController>();
@@ -68,23 +74,17 @@ public class CarController : MonoBehaviour
         wheels[1] = frontWheels[1];
         wheels[2] = rearWheels[0];
         wheels[3] = rearWheels[1];
+
+        timeOutRoadAux = timeOutRoad;
+    }
+
+    void Start()
+    {
+        circuit.carsPos.Add(this, 0);
     }
 
     void FixedUpdate()
     {
-        float torqueInput = Input.GetAxis("Vertical")   * torque;
-        float brakeInput  = Input.GetAxis("Jump")       * brakeTorque;
-        float steerInput  = Input.GetAxis("Horizontal") * maxSteerAngle;
-
-        // torque
-        ApplyTorque(torqueInput);
-
-        // brake
-        ApplyBrake(brakeInput);
-
-        // steering
-        ApplySteering(steerInput);
-
         // AntiRollBar
         GroundWheels(frontWheels[0].wheelCollider, frontWheels[1].wheelCollider);
         GroundWheels(rearWheels[0].wheelCollider, rearWheels[1].wheelCollider);
@@ -92,46 +92,91 @@ public class CarController : MonoBehaviour
         CheckSkid();
 
         CalculateEngineSound();
+
+        CheckOutOfTrack();
+
+        CheckReversed();
     }
 
-    protected void ApplyTorque(float torqueInput)
+    public void ApplyTorque(float torqueInput)
     {
         switch (carType)
         {
             case CarType.FWD:
                 foreach (WheelController wheel in frontWheels)
                 {
-                    wheel.wheelCollider.motorTorque = torqueInput * ((maxSpeed - actualSpeed) / maxSpeed);
+                    wheel.wheelCollider.motorTorque = torqueInput * torque * ((maxSpeed - actualSpeed) / maxSpeed);
                 }
                 break;
             case CarType.RWD:
                 foreach (WheelController wheel in rearWheels)
                 {
-                    wheel.wheelCollider.motorTorque = torqueInput * ((maxSpeed - actualSpeed) / maxSpeed);
+                    wheel.wheelCollider.motorTorque = torqueInput * torque * ((maxSpeed - actualSpeed) / maxSpeed);
                 }
                 break;
             case CarType.AWD:
                 foreach (WheelController wheel in wheels)
                 {
-                    wheel.wheelCollider.motorTorque = torqueInput * ((maxSpeed - actualSpeed) / maxSpeed);
+                    wheel.wheelCollider.motorTorque = torqueInput * torque * ((maxSpeed - actualSpeed) / maxSpeed);
                 }
                 break;
         }
     }
 
-    protected void ApplyBrake(float brakeInput)
+    public void ApplyBrake(float brakeInput)
     {
+        float brake = brakeTorque * brakeInput;
+
         foreach (WheelController wheel in wheels)
         {
-            wheel.wheelCollider.brakeTorque = brakeInput;
+            wheel.wheelCollider.brakeTorque = brake;
         }
     }
 
-    protected void ApplySteering(float steerInput)
+    public void ApplySteering(float steerInput)
     {
+        float steer = steerInput * maxSteerAngle;
+
         foreach (WheelController wheel in frontWheels)
         {
-            wheel.wheelCollider.steerAngle = steerInput;
+            wheel.wheelCollider.steerAngle = steer;
+        }
+    }
+
+    public void ResetCar(Vector3 pos, Quaternion rot)
+    {
+        rigidbody.velocity = Vector3.zero;
+        transform.position = pos;
+        transform.rotation = rot;
+    }
+
+    private void CheckOutOfTrack ()
+    {
+        foreach (WheelController wheel in wheels)
+        {
+            if (wheel.onRoad)
+            {
+                timeOutRoadAux = timeOutRoad;
+                return;
+            }
+        }
+
+        timeOutRoadAux -= Time.deltaTime;
+
+        if (timeOutRoadAux <= 0)
+        {
+            ResetCar(circuit.GetResetPosition(this), circuit.GetResetDirection(this));
+            timeOutRoadAux = timeOutRoad;
+        }
+
+    }
+
+    private void CheckReversed()
+    {
+        if (transform.rotation.eulerAngles.x > 140 && transform.rotation.eulerAngles.x < 220 ||
+            transform.rotation.eulerAngles.z > 140 && transform.rotation.eulerAngles.z < 220)
+        {
+            ResetCar(circuit.GetResetPosition(this), circuit.GetResetDirection(this));
         }
     }
 
@@ -184,6 +229,11 @@ public class CarController : MonoBehaviour
         if (wheelsSkidding == 0 && skidSound.isPlaying)
         {
             skidSound.Stop();
+
+            foreach (ParticleSystem particle in skidSmokes)
+            {
+                particle.Stop();
+            }
         }
         else if (wheelsSkidding > 0)
         {
@@ -193,7 +243,15 @@ public class CarController : MonoBehaviour
             skidSound.panStereo = -skidValues[0] + skidValues[1] - skidValues[2] + skidValues[3];
 
             if (!skidSound.isPlaying)
+            {
                 skidSound.Play();
+
+                foreach (ParticleSystem particle in skidSmokes)
+                {
+                    particle.Play();
+                }
+            }
+                
         }
     }
 
